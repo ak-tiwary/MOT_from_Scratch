@@ -9,10 +9,13 @@
 #It will also load the model from a checkpoint if provided.
 import numpy as np
 import torch
+import torchvision
 import cv2
 
+
+
 class Detector:
-    def __init__(self, exp,  filter_classes=None, device=torch.device("cpu"),test_conf=None, test_size=None, nms_thres=None, class_agnostic=False, chkpt=None):
+    def __init__(self, exp,  filter_classes=None, device=torch.device("cpu"),test_conf=None, test_size=None, nms_thres=None, class_agnostic=False, chkpt=None, num_classes=80):
         """Handles detections using YOLOX. Input images will be numpy images in RGB order and shape
         (N)xCxHxW. Output boxes will be in xywh format (center, width, height).
 
@@ -24,16 +27,18 @@ class Detector:
             test_conf (float | None): A threshold value below which detections are rejected. Default is  0.01.
             test_size (tuple | None): The size to resize input images to before feeding into yolox. Defaults to 
                                       (640,640)
-            nms_thres (float | None): Defaults to 0.7.
+            nms_thres (float | None): IoU threshold for NMS. Defaults to 0.7.
             class_agnostic (bool): Default false. Set to true if non-maximal suppression should ignore class.
             chkpt (string | None) : path to checkpoint for the model provided with exp.
+            num_classes (int) : Defaults to the number of COCO classes.
+            
 
         """
         self.exp = exp
         self.model = exp.get_model().to(device)
         self.model.eval() #inference mode
         
-        self.filter_classes = filter_classes
+        self.filter_classes = torch.tensor(filter_classes).to(device, dtype=torch.float32) #list->tensor for torch.isin
         self.device = device
         
         if nms_thres is not None:
@@ -57,6 +62,10 @@ class Detector:
             checkpoint = torch.load(chkpt, map_location="cpu")
             self.model.load_state_dict(checkpoint["model"])
             
+        self.num_classes = num_classes
+        
+        
+            
         
             
     def __call__(self, img):
@@ -71,17 +80,20 @@ class Detector:
         assert len(img.shape) == 3, f"Shape of imgs is {img.shape} but it should be CxHxW"
         img_info = {}
         img_info["raw_img"] = img
+        img_info["height"], img_info["width"] = img.shape[1:]
         img_info["ratio"] = self._get_ratio(img)
         
-        img_tensor = self._preprocess(img, img_info["ratio"]).to(self.device)
+        img_tensor = self._preprocess(img, img_info["ratio"]).to(self.device).unsqueeze(0)
         with torch.no_grad():
             unprocessed_boxes = self.model(img_tensor)
-            
+            processed_boxes, = self._postprocess(unprocessed_boxes) #Shape is M x 7
+            processed_boxes[:, :4] /= img_info["ratio"] #we want box coordinates in original image
+        return processed_boxes, img_info
         
         #shape of output is NxMx (4 + 1 + C) where M is the number of boxes per image and C is num_classes
   
-    def postprocess(self, unprocessed_boxes):
-        """Will convert the output of yolox and perform nms, filtering desired classes, converting class scores to class prediction,
+    def _postprocess(self, unprocessed_boxes):
+        """Will convert the output of yolox and perform nms, filtering desired classes, converting class scores to a class prediction,
         
 
         Args:
@@ -93,6 +105,56 @@ class Detector:
             a list with the ith index having shape M_i x (4 + 1 + 1 + 1), where M_i is the number of objects in image i, and the 
             second dimension is box coordinates, object confidence, class confidence, and class prediction.
         """
+        #unprocessed boxes has shape NxMx (5+C) so boxes has shape Mx(5+C)
+        output_list = []
+        
+        
+        for img_boxes in unprocessed_boxes: 
+            
+            box_coordinates = img_boxes[:, :4]
+            object_conf = img_boxes[:, 4]
+            class_scores = img_boxes[:, 5:]
+            
+            class_conf, class_pred = torch.max(class_scores, dim=1,keepdim=False) #shape is M
+            class_pred = class_pred.to(dtype=torch.float32)
+            
+            boxes = torch.cat([box_coordinates, object.conf[:, None], 
+                               class_conf[:, None], class_pred[:,None]], dim=1)
+            
+            #only keep boxes above 0.01 conf
+            mask = (class_conf * object_conf) > self.test_conf 
+            
+            #only keep boxes with desired classes
+            mask &= torch.isin(class_pred, self.filter_classes)
+
+            boxes = boxes[mask]
+            center_x = boxes[:, 0]
+            center_y = boxes[:, 1]
+            width = boxes[:, 2]
+            height = boxes[:,3]
+            boxes_xyxy = torch.stack([center_x - width / 2, center_y - height / 2, 
+                                      center_x + width / 2, center_y + height / 2 ], dim=1)
+        
+            object_conf = boxes[:, 4]
+            class_conf = boxes[:, 5]
+            class_preds = boxes[:, 6]
+            if self.class_agnostic:
+                nms_indices = torchvision.ops.nms(boxes=boxes_xyxy,
+                                                  scores= object_conf * class_conf,
+                                                  iou_threshold=self.nms_thres)
+                
+            else:
+                nms_indices = torchvision.ops.batched_nms(boxes=boxes_xyxy,
+                                                          scores = object_conf * class_conf,
+                                                          idxs=class_preds,
+                                                          iou_threshold=self.nms_thres)
+            
+            boxes = boxes[nms_indices]
+            
+            output_list.append(boxes)
+        
+        return output_list
+            
   
     def _preprocess(self, img, ratio):
         """Given a numpy image and desired ratio, rescales the image, normalizes using ImageNet mean and std.,
