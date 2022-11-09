@@ -15,7 +15,9 @@ import cv2
 
 
 class Detector:
-    def __init__(self, exp,  filter_classes=None, device=torch.device("cpu"),test_conf=None, test_size=None, nms_thres=None, class_agnostic=False, chkpt=None, num_classes=80):
+    def __init__(self, exp,  filter_classes=None, device=torch.device("cpu"),
+                 test_conf=None, test_size=None, nms_thres=None, class_agnostic=False, 
+                 chkpt=None, num_classes=80):
         """Handles detections using YOLOX. Input images will be numpy images in RGB order and shape
         (N)xCxHxW. Output boxes will be in xywh format (center, width, height).
 

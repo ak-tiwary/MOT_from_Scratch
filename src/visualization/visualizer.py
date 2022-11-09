@@ -107,6 +107,7 @@ class Visualizer:
         self.class_colors = class_colors
         self.num_classes = len(self.class_names)
         
+        
     def add_boxes_to_img(self, img, boxes, img_info, add_text=True):
         """Adds boxes to the image at the appropriate location. If box_info is provided,
         will use it to write text. Otherwise will write class label as text.
@@ -138,6 +139,8 @@ class Visualizer:
         for i,box in enumerate(boxes):
             #write this box using cv2.rectangle
             top_left, bottom_right, object_conf, class_conf  = box[:2], box[2:4], box[4], box[5]
+            x1,y1 = top_left
+            x2,y2 = bottom_right
             conf = object_conf * class_conf
             
             text = f"{class_labels[i]} {conf * 100:.1f}%"
@@ -146,6 +149,16 @@ class Visualizer:
             
             text_color = (0,0,0) if np.mean(box_color) > (255 / 2) else (255,255,255)
             
+            #drawn bounding box
+            img_copy = cv2.rectangle(img_copy, (x1,y1), (x2,y2), color=box_color,thickness=2)
+            
+            (text_width,_), _ = cv2.getTextSize(text, fontFace=cv2.FONT_HERSHEY_COMPLEX, 
+                                                          fontScale=0.6, thickness=1)
+            img_copy = cv2.rectangle(img_copy, (x1,y1-20), (x1 + text_width, y1), color=box_color,thickness=1)
+            img_copy = cv2.putText(img_copy, text=text, org=(x1,y1-5),fontFace=cv2.FONT_HERSHEY_COMPLEX,
+                                   fontScale=0.6, color=text_color, thickness=1)
+            
+        return img_copy
             
             
         
