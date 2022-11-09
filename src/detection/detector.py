@@ -75,7 +75,7 @@ class Detector:
             img (numpy array):unnormalized image in RGB order.
             
         Returns:
-            a tuple (bboxes, image_info)
+            a tuple (bboxes, image_info) where bboxes is a numpy array and image_info is a dict.
         """
         assert len(img.shape) == 3, f"Shape of imgs is {img.shape} but it should be CxHxW"
         img_info = {}
@@ -88,7 +88,8 @@ class Detector:
             unprocessed_boxes = self.model(img_tensor)
             processed_boxes, = self._postprocess(unprocessed_boxes) #Shape is M x 7
             processed_boxes[:, :4] /= img_info["ratio"] #we want box coordinates in original image
-        return processed_boxes, img_info
+            
+        return processed_boxes.to(torch.device("cpu")).numpy(), img_info
         
         #shape of output is NxMx (4 + 1 + C) where M is the number of boxes per image and C is num_classes
   
