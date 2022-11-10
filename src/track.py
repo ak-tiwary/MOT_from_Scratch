@@ -15,7 +15,8 @@ class Track:
     """A single track, containing information about one box
     over multiple frames."""
     def __init__(self, bbox):
-        """Initialize track with bounding box .
+        """Initialize track with bounding box in xywh format. We track xywh itself in
+        the Kalman Filter following BoT-Sort (2022) instead of the standard xysa.
         
 
         Args:
@@ -53,8 +54,6 @@ class Track:
     def predict(self):
         """Predicts the location of the box using the kalman filter and returns box coordinates."""
         
-        
-        
         #just lost the track, so keep a copy of the KF before future predictions
         if self.time_since_last_detection == 1:
             self.kf_at_last_detection = copy.deepcopy(self.kf)
@@ -87,12 +86,24 @@ class Track:
         adds new "observations" that are linear interpolations from the last observation
         to the new observation."""
         
+        kf = self.kf_at_last_detection
         
-        
-        
+        old_box = self.get_box_coordinates(kf)
+        diff_box = box - old_box
+        step_size = 1./num_steps
+        for i in range(num_steps-1):
+            box_i = old_box + (i+1) *step_size * diff_box
+            kf.predict()
+            kf.update(box_i)
+        kf.predict()
+        kf.update(box)
+        self.kf = kf
         self.kf_at_last_detection = None
-        pass
         
-    def get_box_coordinates(self):
+        
+    def get_box_coordinates(self, kf=None):
+        """Returns box coordinates"""
+        if kf is not None:
+            return kf.x[:4]
         return self.kf.x[:4]
 
