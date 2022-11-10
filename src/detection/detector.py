@@ -37,23 +37,28 @@ class Detector:
 
         """
         self.exp = exp
-        self.model = exp.get_model().to(device)
+        self.model = self.exp.get_model().to(device)
         self.model.eval() #inference mode
         
-        self.filter_classes = torch.tensor(filter_classes).to(device, dtype=torch.float32) #list->tensor for torch.isin
+        self.filter_classes = filter_classes
+        
+        if self.filter_classes is not None:
+            self.filter_classes = torch.tensor(filter_classes).to(device, dtype=torch.float32) 
+            #list->tensor for torch.isin
+            
         self.device = device
         
         if nms_thres is not None:
             self.nms_thres = nms_thres
         else:
-            self.nms_thres = self.exp.nms_thre
+            self.nms_thres = self.exp.nmsthre
             
         if test_size is not None:
             self.test_size = test_size
         else:
             self.test_size = self.exp.test_size
             
-        if self.test_conf is not None:
+        if test_conf is not None:
             self.test_conf = test_conf
         else:
             self.test_conf = self.exp.test_conf
@@ -74,7 +79,7 @@ class Detector:
         """Will run yolox on a single image of shape CxHxW.
 
         Args:
-            img (numpy array):unnormalized image in RGB order.
+            img (numpy array):unnormalized image in RGB order of shape HxWxC.
             
         Returns:
             a tuple (bboxes, image_info) where bboxes is a numpy array and image_info is a dict.
@@ -82,16 +87,15 @@ class Detector:
         assert len(img.shape) == 3, f"Shape of imgs is {img.shape} but it should be CxHxW"
         img_info = {}
         img_info["raw_img"] = img
-        img_info["height"], img_info["width"] = img.shape[1:]
+        img_info["height"], img_info["width"] = img.shape[:2]
         img_info["ratio"] = self._get_ratio(img)
         
-        img_tensor = self._preprocess(img, img_info["ratio"]).to(self.device).unsqueeze(0)
+        img_tensor = self._preprocess(img, img_info["ratio"]).to(self.device)
+        img_tensor = img_tensor.unsqueeze(0).cuda().float()
         with torch.no_grad():
             unprocessed_boxes = self.model(img_tensor)
-            processed_boxes, = self._postprocess(unprocessed_boxes) #Shape is M x 7
-            processed_boxes[:, :4] /= img_info["ratio"] #we want box coordinates in original image
-            
-        return processed_boxes.to(torch.device("cpu")).numpy(), img_info
+            output = self._postprocess(unprocessed_boxes) #Shape is M x 7
+        return output, img_info
         
         #shape of output is NxMx (4 + 1 + C) where M is the number of boxes per image and C is num_classes
   
@@ -117,18 +121,18 @@ class Detector:
             box_coordinates = img_boxes[:, :4]
             object_conf = img_boxes[:, 4]
             class_scores = img_boxes[:, 5:]
-            
             class_conf, class_pred = torch.max(class_scores, dim=1,keepdim=False) #shape is M
             class_pred = class_pred.to(dtype=torch.float32)
             
-            boxes = torch.cat([box_coordinates, object.conf[:, None], 
+            boxes = torch.cat([box_coordinates, object_conf[:, None], 
                                class_conf[:, None], class_pred[:,None]], dim=1)
             
             #only keep boxes above 0.01 conf
             mask = (class_conf * object_conf) > self.test_conf 
-            
             #only keep boxes with desired classes
-            mask &= torch.isin(class_pred, self.filter_classes)
+            if self.filter_classes is not None:
+                mask &= torch.isin(class_pred, self.filter_classes)
+                
 
             boxes = boxes[mask]
             center_x = boxes[:, 0]
@@ -153,7 +157,6 @@ class Detector:
                                                           iou_threshold=self.nms_thres)
             
             boxes = boxes[nms_indices]
-            
             output_list.append(boxes)
         
         return output_list
@@ -162,27 +165,25 @@ class Detector:
     def _preprocess(self, img, ratio):
         """Given a numpy image and desired ratio, rescales the image, normalizes using ImageNet mean and std.,
         and converts to torch tensor."""
-        
         img = self._resize(img, ratio, to_float=True)
-        img /= 255 
+        img = np.transpose(img, (2,0,1))
+        #img /= 255. 
+        #means = np.array([0.485, 0.456, 0.406]).reshape((3,1,1))
+        #stds=np.array([0.229,0.224,0.225]).reshape((3,1,1))
         
-        means = np.array([0.485, 0.456, 0.406]).reshape((3,1,1))
-        stds=np.array([0.229,0.224,0.225]).reshape((3,1,1))
+        #normalized_img = (img - means)/stds
         
-        normalized_img = (img - means)/stds
-        
-        return torch.from_numpy(normalized_img)
+        return torch.from_numpy(img).float()
         
     def _resize(self, img, ratio, to_float=True):
         """Resizes an image to the given ratio and pads with (114,114,114) (gray) as in the demo from YOLOX. 
         If to_float, converts np.array from uint8 to float."""
         
-        h, w = img.shape[1]
+        h, w = img.shape[:2]
         new_h, new_w = int(h * ratio), int(w * ratio)
-        
-        padded_img = np.ones(self.test_size, dtype=np.uint8) * 114
-        resized_img = cv2.resize(src=img, dsize=(new_w,new_h), interpolation=cv2.INTER_LINEAR)
-        padded_img[:new_h, :new_w] = resized_img
+        padded_img = np.ones((self.test_size[0], self.test_size[1], 3), dtype=np.uint8) * 114
+        resized_img = cv2.resize(src=img, dsize=(new_w,new_h), interpolation=cv2.INTER_LINEAR).astype(np.uint8)
+        padded_img[:new_h, :new_w, ...] = resized_img
         
         if to_float:
             padded_img = np.ascontiguousarray(padded_img,dtype=np.float32)
@@ -191,7 +192,7 @@ class Detector:
 
     def _get_ratio(self, img):
         """Returns the resize ratio for the given image."""
-        h, w = img.shape[1:]
+        h, w = img.shape[:2]
         test_h, test_w = self.test_size
 
         ratio = min(test_h / h, test_w / w)
