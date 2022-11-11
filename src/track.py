@@ -14,7 +14,7 @@ from filterpy.kalman import KalmanFilter
 class Track:
     """A single track, containing information about one box
     over multiple frames."""
-    def __init__(self, bbox):
+    def __init__(self, bbox, id):
         """Initialize track with bounding box in xywh format. We track xywh itself in
         the Kalman Filter following BoT-Sort (2022) instead of the standard xysa.
         
@@ -22,6 +22,7 @@ class Track:
         Args:
             bbox (np.array): an array of length 7, [x,y,w,h, obj conf, 
                              class conf, class pred]
+            id (int) : ID number of this track
         """
         
         box_coordinates = bbox[:4]
@@ -49,6 +50,7 @@ class Track:
         
         self.time_since_last_detection = 0
         self.kf_at_last_detection = None 
+        self.id = id
         
         
     def predict(self):
