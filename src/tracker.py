@@ -34,9 +34,8 @@ import time
 
 class Tracker:
     def __init__(self, det, track_expiry_time=50, low_conf_threshold=0.6, min_conf_threshold=0.2,
-                 iou_threshold=0.2):
-        """The main tracker that handles a single step of tracking. For MOT20 the low_conf_thres
-        should be 0.6 according to OC-SORT.
+                 iou_threshold=0.2, MOT_IDs=True):
+        """The main tracker that handles a single step of tracking. 
         
         Args:
             det (Detector): A detector object initialized already with desired settings.
@@ -47,19 +46,20 @@ class Tracker:
             min_conf_threshold (float): The minimum confidence threshold below which boxes
                                         are not to be considered
             iou_threshold (float): The minimum iou threshold below which a matching is rejected.
+            MOT_IDs (bool): MOT 20 etc. want IDs to be positive, so boolean flag for this.
         """
         
         
         self.detector = det
         self.detector.test_conf = min_conf_threshold
-        self.alive_tracks = None
-        self.tracks_on_hold = []
-        self.id_ctr = 0
+        self.tracks = []
+        self.id_ctr = 1 if MOT_IDs else 0 
         self.appearance_model = None #TODO
         self.low_conf_threshold = low_conf_threshold
         self.latest_frame = None
         self.visualizer = TrackVisualizer()
         self.iou_threshold = iou_threshold
+        self.track_expiry_time = track_expiry_time
         
 
         
@@ -90,21 +90,47 @@ class Tracker:
         
         
         
-    def update(detections, scores, frame=None):
+    def update(self, detections, scores, frame=None):
         """Given rescaled detected bounding boxes and their confidence scores, updates the trackers by associating detections to appropriate trackers.
 
         Args:
             detections (np.ndarray): detected bboxes in xywh format.
-            scores (np.ndarry): 1d array of confidence scores
+            scores (np.ndarry): 1d array of confidence scores for each box
             frame (np.ndarray | None): The frame currently being considered. If None, will use self.latest_frame.
         
         Returns:
             output bboxes with IDs of shape Nx5 [[x,y,w,h,ID], ...]
         """
+        if frame is None:
+            frame = self.latest_frame
+            
+        
         
         # 2. Divide boxes into high and low confidence boxes.
+        high_conf_boxes = detections[scores > self.low_conf_threshold]
+        low_conf_boxes = detections[scores  <= self.low_conf_threshold]
         
-        # 3. The high confidence boxes are matched first with the predictions of the tracks.
+        no_boxes = high_conf_boxes.size == 0 #flag for no boxes
+        
+        if not self.tracks: #all high confidence boxes are new tracks.
+            self.tracks = [Track(box, id=i+self.id_ctr) for i,box in enumerate(high_conf_boxes)]
+            self.id_ctr += len(self.tracks)
+            
+            box_with_ids = np.stack([np.concatenate([t.box_coordinates, 
+                                                     np.array([t.id])]) for t in self.tracks], 
+                                    axis=0)
+            
+            return box_with_ids
+        
+        # 3. The high confidence boxes are matched first with the predictions of the tracks
+        if not no_boxes :#if there are high confidence boxes
+            pred_tracks = [t.predict() for t in self.tracks]
+            track_indices = np.arange(len(self.tracks))
+            box_indices = np.arange(len(high_conf_boxes))
+            
+        #the cost function is a combination of IoU, velocity consistency, and appearance (to be added)
+
+    
         # 4. Next the remaining tracks are matched with the low confidence boxes (maybe occluded objects)
         # 5. Finally the *last observations* (OC-recovery) of the remaining tracks are matched with the
         #    remaining high confidence boxes.
@@ -114,14 +140,27 @@ class Tracker:
         #   tracks and are returned/added to the image.     
             
     
-    def _associate(self, track, box):
-        """Given an existing track and a box, add that box to the track."""   
+    def _associate(self, tracks, boxes, cost_matrix):
+        """Given track and box indices as 1d numpy arrays, and a cost matrix for associations between them, performs linear assignment.
+        Returns matches as an Nx2 np array, unmatched_tracks as a 1d array, and unmatched_dets as a 1d array."""
+        matched_tracks, matched_boxes = hungarian_algorithm(cost_matrix)
+        track_mask = np.zeros_like(tracks, dtype=bool)
+        track_mask[matched_tracks] = True
+        box_mask = np.zeros(boxes, dtype=bool)
+        box_mask[matched_boxes] = True
+        matched_tracks = tracks[track_mask]
+        matched_boxes = boxes[box_mask]
+        
+        unmatched_tracks = tracks[~track_mask]
+        unmatched_boxes = boxes[~box_mask]
+        
+        return np.stack([matched_tracks, matched_boxes], axis=1), unmatched_tracks, unmatched_boxes
         
         
             
 
             
     def draw(self, frame, tracks):
-        """Draws the bounding boxes in each track and returns an img in RGB order."""
+        """Draws the bounding boxes with ID for each track and returns an img in RGB order."""
          
         return self.visualizer(frame, tracks) if tracks else frame

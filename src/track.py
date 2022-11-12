@@ -1,6 +1,10 @@
 import copy
 import numpy as np
 from filterpy.kalman import KalmanFilter
+from collections import defaultdict
+from functools import partial
+
+
 
 
 #TO ADD:
@@ -14,19 +18,22 @@ from filterpy.kalman import KalmanFilter
 class Track:
     """A single track, containing information about one box
     over multiple frames."""
-    def __init__(self, bbox, id):
+    def __init__(self, bbox, id, box_conf=None, class_category=None, dt=3):
         """Initialize track with bounding box in xywh format. We track xywh itself in
-        the Kalman Filter following BoT-Sort (2022) instead of the standard xysa.
+        the Kalman Filter following BoT-Sort (2022) instead of the standard xysr.
         
 
         Args:
-            bbox (np.array): an array of length 7, [x,y,w,h, obj conf, 
-                             class conf, class pred]
+            bbox (np.array): an array of length 4, [x,y,w,h]
             id (int) : ID number of this track
+            box_conf (float | None): Optional box confidence
+            class_category (float | None): Optional class category
+            dt (int):  Frame interval to use for velocity calculations. Defaults to 3, as suggested by OC-Sort.
         """
         
-        box_coordinates = bbox[:4]
-        self.class_category = bbox[-1]
+        box_coordinates = bbox
+        self.box_conf = box_conf
+        self.class_category = class_category
         
         self.kf = KalmanFilter(dim_x=8, dim_z=4)
         self.kf.x = box_coordinates
@@ -49,18 +56,21 @@ class Track:
         
         
         self.time_since_last_detection = 0
-        self.kf_at_last_detection = None 
+        self.kf_at_last_detection = None #for OC-Smoothing, we revert KF to this state
+        self.last_observation = bbox
+        self.observation_before_last = None
+        self.obs_streak = 1 #streak of matched boxes
+        self.observation_history = defaultdict(partial(np.ndarray, 0))
         self.id = id
+        self.time_lapsed = 0
+        self.observation_history[self.time_lapsed] = bbox
+        self.velocity_direction = 0
         
         
     def predict(self):
-        """Predicts the location of the box using the kalman filter and returns box coordinates."""
-        
-        #just lost the track, so keep a copy of the KF before future predictions
-        if self.time_since_last_detection == 1:
-            self.kf_at_last_detection = copy.deepcopy(self.kf)
-            
-        self.time_since_last_detection += 1
+        """Predicts the location of the box using the kalman filter and returns box coordinates.
+        Assumed that consecutive predictions will not be called without an update(None) in between."""
+         
             
         self.kf.predict()
             
@@ -68,20 +78,57 @@ class Track:
     
     def update(self, box):
         """Updates the kalman filter with the observation in 1d np array box.
-        Box is either xywh coordinates, or xywh+3 coordinates."""
+        Box is either xywh coordinates, or xywh+3 coordinates. If the box is None, will
+        update the kalman filter's posteriors only. It is assumed that update is called
+        even when there is no matched box with None as parameter."""
+        self.time_lapsed += 1
         
-        assert len(box) in [4,7], "box should have length 4 or 7"
+        if box is None:
+            #there was no matching at this step.
+            self.kf.update(None)
+            self.obs_streak = 0
+            
+            #we just lost the track, so we keep a copy of the KF before future steps
+            if self.time_since_last_detection == 0:
+                self.kf_at_last_detection = copy.deepcopy(self.kf)
+            
+            self.time_since_last_detection += 1
+            return
+        
         
         if self.time_since_last_detection > 1:
             self.observation_centric_recovery(box, self.time_since_last_detection)
+        
             
         if len(box) == 7:
             box = box[:4]
          
-            
+       
         self.kf.update(box)
         
+        self.observation_history[self.time_lapsed] = box
+        self.obs_streak += 1
+
+        self.observation_before_last = self.last_observation
+        self.last_observation = box
         self.time_since_last_detection = 0
+        self._update_velocity()
+        
+    def _update_velocity(self):
+        """Updates the velocity prediction"""
+        curr_box = self.last_observation
+        flag = True
+        prev_box = None
+        for i in range(self.dt, 0, -1):
+            prev_box = self.observation_history[self.time_lapsed - i]
+            if prev_box.size: #if we have this particular observation
+                flag = False
+                break
+        if flag:#no observations recently so use the last observation. May change this behavior later
+            prev_box = self.observation_before_last
+               
+        self.velocity_direction = normalize((curr_box - prev_box)[:2])
+        
         
     def observation_centric_recovery(self, box, num_steps):
         """Reverts the update steps of the kalman filter to the last observation and
@@ -109,3 +156,10 @@ class Track:
             return kf.x[:4]
         return self.kf.x[:4]
 
+
+
+
+def normalize(v, eps=1e-12):
+    """Given a 1d numpy array v, normalizes it to have unit length (or zero)"""
+    norm = np.linalg.norm(v)
+    return v / (norm(v) + eps)
