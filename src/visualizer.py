@@ -257,3 +257,13 @@ class Visualizer:
         
     
     
+    
+class TrackVisualizer(Visualizer):
+    def __init__(self, class_names=COCO_CLASSES, class_colors=_COLORS):
+        super(TrackVisualizer, self).__init__(class_names, class_colors)
+        
+    def __call__(self, frame, tracks):
+        """Given a list of Track objects and a frame in RGB order, draws the boxes
+        along with the object id for each."""
+        pass
+        
