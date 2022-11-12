@@ -27,3 +27,16 @@ def get_iou_matrix(boxes_1, boxes_2):
     union_areas = area(boxes_1) + area(boxes_2) - inter_areas
     
     return inter_areas / union_areas
+
+def get_velocity_matrix(sources, targets, eps=1e-12):
+    """Given np arrays sources and targets of shapes Mx2 and Nx2 will 
+    returns an MxNx2 matrix of pairwise velocity directions from each source to each target such that 
+    M[i,j] = velocity_direction(sources[i], targets[j])"""
+    sources = sources.unsqueeze(1)
+    targets = targets.unsqueeze(0)
+    
+    displacement = targets-sources #NxMx2
+    norms = np.linalg.norm(displacement, axis=2, keepdims=True)
+    
+    return displacement / (norms + eps) #shape is NxMx2
+    

@@ -64,7 +64,7 @@ class Track:
         self.id = id
         self.time_lapsed = 0
         self.observation_history[self.time_lapsed] = bbox
-        self.velocity_direction = 0
+        self.velocity_direction = np.array([0,0])
         
         
     def predict(self):
@@ -114,18 +114,25 @@ class Track:
         self.time_since_last_detection = 0
         self._update_velocity()
         
-    def _update_velocity(self):
-        """Updates the velocity prediction"""
-        curr_box = self.last_observation
-        flag = True
+    def get_obs_from_dt_frames_back(self, give_obs_before_last=False):
+        """Returns the first observation that occurred in the last dt frames. If the flag is True,
+        will return the observation before last when no observation was found between dt frames ago and 1 frame ago."""
         prev_box = None
+        flag = True
         for i in range(self.dt, 0, -1):
             prev_box = self.observation_history[self.time_lapsed - i]
             if prev_box.size: #if we have this particular observation
                 flag = False
                 break
-        if flag:#no observations recently so use the last observation. May change this behavior later
-            prev_box = self.observation_before_last
+        if flag: #no observations in the last dt frames
+            return self.observation_before_last if give_obs_before_last else self.last_observation
+        return prev_box
+    
+    def _update_velocity(self):
+        """Updates the velocity prediction"""
+        curr_box = self.last_observation
+
+        prev_box = self.get_obs_from_dt_frames_back(give_obs_before_last=True)
                
         self.velocity_direction = normalize((curr_box - prev_box)[:2])
         

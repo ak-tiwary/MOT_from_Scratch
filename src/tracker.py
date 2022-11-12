@@ -3,7 +3,7 @@ from scipy.optimize import linear_sum_assignment as hungarian_algorithm
 from detector import Detector
 from track import Track
 from visualizer import TrackVisualizer
-from tools import get_iou_matrix
+from tools import get_iou_matrix, get_velocity_matrix
 import time
 
 
@@ -34,7 +34,7 @@ import time
 
 class Tracker:
     def __init__(self, det, track_expiry_time=50, low_conf_threshold=0.6, min_conf_threshold=0.2,
-                 iou_threshold=0.2, MOT_IDs=True):
+                 iou_threshold=0.2, lambda_vel=0.2, MOT_IDs=True):
         """The main tracker that handles a single step of tracking. 
         
         Args:
@@ -46,6 +46,7 @@ class Tracker:
             min_conf_threshold (float): The minimum confidence threshold below which boxes
                                         are not to be considered
             iou_threshold (float): The minimum iou threshold below which a matching is rejected.
+            lambda_vel (float): Hyperparameter for the cost IoU + λ * velocity_cost
             MOT_IDs (bool): MOT 20 etc. want IDs to be positive, so boolean flag for this.
         """
         
@@ -59,6 +60,7 @@ class Tracker:
         self.latest_frame = None
         self.visualizer = TrackVisualizer()
         self.iou_threshold = iou_threshold
+        self.lambda_vel = lambda_vel
         self.track_expiry_time = track_expiry_time
         
 
@@ -110,7 +112,8 @@ class Tracker:
         high_conf_boxes = detections[scores > self.low_conf_threshold]
         low_conf_boxes = detections[scores  <= self.low_conf_threshold]
         
-        no_boxes = high_conf_boxes.size == 0 #flag for no boxes
+        no_high_boxes = high_conf_boxes.size == 0 #flag for no boxes
+        no_low_boxes = low_conf_boxes.size == 0
         
         if not self.tracks: #all high confidence boxes are new tracks.
             self.tracks = [Track(box, id=i+self.id_ctr) for i,box in enumerate(high_conf_boxes)]
@@ -122,12 +125,50 @@ class Tracker:
             
             return box_with_ids
         
+        if no_high_boxes and no_low_boxes:
+            for track in self.trackers:
+                track.update(None)
+            return np.empty((0,5))
+        
+        pred_tracks = np.stack([t.predict() for t in self.tracks], axis=0)
+        track_indices = np.arange(len(self.tracks))
+        
         # 3. The high confidence boxes are matched first with the predictions of the tracks
-        if not no_boxes :#if there are high confidence boxes
-            pred_tracks = [t.predict() for t in self.tracks]
-            track_indices = np.arange(len(self.tracks))
+        if not no_high_boxes :#if there are high confidence boxes
             box_indices = np.arange(len(high_conf_boxes))
+            #we want a cost matrix, so higher is worse
+            iou_cost = 1 - get_iou_matrix(pred_tracks, high_conf_boxes)
             
+            last_observations = np.stack([t.last_observation for t in self.tracks], axis=0)
+            #NxMx2
+            
+            velocity_matrix_from_tracks_to_detections = get_velocity_matrix(last_observations, high_conf_boxes) 
+            track_velocities = np.stack([t.velocity_direction for t in self.tracks], axis=0).unsqueeze(1) #Nx1x2
+            
+            #take dot product between the two unit vectors. The more aligned they are, the higher the score.
+            velocity_consistency_matrix = np.sum(velocity_matrix_from_tracks_to_detections *
+                                                 track_velocities,
+                                                 axis=-1) #NxM
+            velocity_consistency_matrix *= scores.unsqueeze(0) #velocity score is weighted by object confidence
+            
+            #we want a cost matrix for which higher is worse. Also we normalize to get between 0 and 1
+            velocity_cost = (1-velocity_consistency_matrix) / 2
+
+            
+            matches, unmatched_tracks, unmatched_boxes = self._associate(track_indices, box_indices,
+                                                                         iou_cost + self.lambda_vel * velocity_cost)
+            to_unmatch_trks = []
+            to_unmatch_boxes = []
+            for trk_idx, box_idx in matches:
+                if iou_cost[trk_idx, box_idx] > (1 - self.iou_threshold): #low iou match, reject
+                    to_unmatch_trks.append(trk_idx)
+                    to_unmatch_boxes.append(box_idx)
+                else:
+                    #good match
+                    self.tracks[trk_idx].update(high_conf_boxes[box_idx])
+                    
+            np.concatenate()
+
         #the cost function is a combination of IoU, velocity consistency, and appearance (to be added)
 
     
