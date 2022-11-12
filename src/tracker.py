@@ -14,6 +14,20 @@ from tools import get_iou_matrix
 #         self.appearance = appearance #keep track of appearance at the step when lost.
 #TODO: Camera Motion Compensation
 #Make Q and R be time dependent following BoT-SORT
+
+
+#BASIC ALGORITHM:
+#
+# 1. Take in an image -> detector -> detected boxes. Normalize the boxes.
+# 2. Divide boxes into high and low confidence boxes.
+# 3. The high confidence boxes are matched first with the predictions of the tracks.
+# 4. Next the remaining tracks are matched with the low confidence boxes (maybe occluded objects)
+# 5. Finally the *last observations* (OC-recovery) of the remaining tracks are matched with the
+#    remaining high confidence boxes.
+# 6. Any remaining high confidence boxes are used to create new tracks.
+# 7. Tracks are updated with new boxes.
+# 8. All the tracks that have a streak of detections > threshold (=3) are considered "proper"
+#   tracks and are returned/added to the image.     
         
     
 
@@ -49,7 +63,7 @@ class Tracker:
 
         
     def step(self, frame):
-        """Track objects in new frame and update tracks.
+        """Track objects in new frame and update tracks. Returns frame with bboxes along with IDs attached. Wrapper function around `update` and `draw`.
         
         Args:
             frame (np.ndarray): The frame as read by opencv and meant to be passed to the detector.
@@ -129,6 +143,17 @@ class Tracker:
 
         #handle case where all boxes are low confidence. 
         
+        
+    def update(detections, scores, frame=None):
+        """Given rescaled detected bounding boxes and their confidence scores, updates the trackers by associating detections to appropriate trackers.
+
+        Args:
+            detections (np.ndarray): detected bboxes in xywh format.
+            scores (np.ndarry): 1d array of confidence scores
+        
+        Returns:
+            output bboxes with IDs of shape Nx5 [[x,y,w,h,ID], ...]
+        """
             
     
     def _associate(self, track, box):
@@ -138,7 +163,7 @@ class Tracker:
             
 
             
-    def _draw(self, frame, tracks):
+    def draw(self, frame, tracks):
         """Draws the bounding boxes in each track and returns an img in RGB order."""
          
         return self.visualizer(frame, tracks) if tracks else frame
