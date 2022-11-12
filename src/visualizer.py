@@ -247,9 +247,11 @@ class Visualizer:
             
             (text_width,_), _ = cv2.getTextSize(text, fontFace=cv2.FONT_HERSHEY_SIMPLEX, 
                                                           fontScale=.8, thickness=1)
-            img_copy = cv2.rectangle(img_copy, (x1,y1-30), (x1 + text_width, y1), color=box_color,thickness=-1)
-            img_copy = cv2.putText(img_copy, text=text, org=(x1,y1-5),fontFace=cv2.FONT_HERSHEY_SIMPLEX,
-                                   fontScale=0.8, color=text_color, thickness=1)
+            img_copy = cv2.rectangle(img_copy, (x1,y1-30), (x1 + text_width, y1), 
+                                     color=box_color,thickness=-1)
+            img_copy = cv2.putText(img_copy, text=text, org=(x1,y1-5),
+                                   fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=0.8,
+                                   color=text_color, thickness=1)
             
         return cv2.cvtColor(img_copy, cv2.COLOR_RGB2BGR)
             
@@ -262,8 +264,40 @@ class TrackVisualizer(Visualizer):
     def __init__(self, class_names=COCO_CLASSES, class_colors=_COLORS):
         super(TrackVisualizer, self).__init__(class_names, class_colors)
         
-    def __call__(self, frame, tracks):
-        """Given a list of Track objects and a frame in RGB order, draws the boxes
-        along with the object id for each."""
-        pass
+    def __call__(self, frame, boxes):
+        """Given a frame in RGB order, and an np array boxes of shape Nx5 where the first 4 coordinates are box coordinates in xywh order and the last coordinate is the ID, returns
+        a frame with the boxes drawn as rectangles on the correct location with the correct
+        text.
+        """
+        img_copy = cv2.cvtColor(frame.copy(), cv2.COLOR_RGB2BGR)
+        
+        #we need xyxy format for opencv
+        boxes[..., :2], boxes[..., 2:] = boxes[..., :2] - (boxes[..., 2:] / 2), \
+                                         boxes[..., :2] + (boxes[..., 2:] / 2)
+        
+        for i, box in enumerate(boxes):
+            x1,y1,x2,y2, id = box
+            #opencv needs integer pixel coordinates
+            x1,y1,x2,y2 = map(int, [x1,y1,x2,y2])
+            
+            text = f"{id}"
+            box_color = tuple(self.class_colors[id % len(self.class_colors)])
+            text_color = (0,0,0) if np.mean(box_color) > (255 / 2) else (255,255,255)
+            
+            img_copy = cv2.rectangle(img_copy, (x1, y1), (x2,y2),
+                                     color=box_color, thickness=3)
+            
+            (text_width,_), _ = cv2.getTextSize(text, fontFace=cv2.FONT_HERSHEY_SIMPLEX, 
+                                                          fontScale=.8, thickness=2)
+            
+            img_copy = cv2.rectangle(img_copy, (x1,y1-30), 
+                                     (x1 + text_width, y1), color=box_color,thickness=-1)
+            
+            img_copy = cv2.putText(img_copy, text=text, org=(x1,y1-5),
+                                   fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=0.8, 
+                                   color=text_color, thickness=2)
+            
+        
+        return cv2.cvtColor(img_copy, cv2.COLOR_BGR2RGB)
+            
         
