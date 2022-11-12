@@ -4,6 +4,7 @@ from detector import Detector
 from track import Track
 from visualizer import TrackVisualizer
 from tools import get_iou_matrix
+import time
 
 
 #TODO: Add appearance information
@@ -68,80 +69,25 @@ class Tracker:
         Args:
             frame (np.ndarray): The frame as read by opencv and meant to be passed to the detector.
             
-        Returns: Image with tracked boxes along with identity information to it."""
+        Returns: Image with tracked boxes along with identity information to it, time taken by tracker."""
             
         #bboxes is Nx7
         
         self.latest_frame = frame
         bboxes, img_info = self.detector(frame)
         
-        #box_coords = bboxes[:, :4]
         
-        confidences = bboxes[:, 4] * bboxes[:, 5]
-        mask = confidences > self.low_conf_threshold
+        ratio = self.detector._get_ratio(img_info["raw_img"])
+        bboxes[..., :4] /= ratio #normalize boxes
+        scores = bboxes[..., 4] * bboxes[..., 5]
         
-        high_conf_boxes = bboxes[mask]
-        low_conf_boxes = bboxes[~mask]
+        t0 = time.time()
         
-        high_conf_box_coords = high_conf_boxes[:4]
-        low_conf_box_coords = low_conf_boxes[:4]
-        
-        if self.alive_tracks is None:
-            #first frame with any objects, no matching required. Ignore low_conf boxes.
-            
-            self.alive_tracks = [Track(box, id=i+self.id_ctr) for i,box in enumerate(high_conf_boxes) ]
-            id_ctr += len(self.alive_tracks)
-            return self._draw(frame, self.alive_tracks)
-
-        #We have some alive tracks, some tracks on hold for recovery
-        #and we have low and high confidence detection boxes.
+        tracked_boxes = self.update(bboxes[..., :4], scores)
+        t1 = time.time()
+        return self.draw(frame, tracked_boxes), t1-t0
         
         
-        #make the predictions for where the boxes will be in this step
-        #we will use this for IoU and association calculations
-        predicted_tracks = []
-        for track in self.alive_tracks:
-            predicted_tracks.append(track.predict())
-        predicted_tracks = np.stack(predicted_tracks, axis=0)
-        
-        if high_conf_box_coords:
-            iou_cost = get_iou_matrix(predicted_tracks, high_conf_box_coords)
-            track_matches, box_matches = hungarian_algorithm(iou_cost)
-            
-            matches = np.stack([track_matches, box_matches], axis=1)
-            matched_ious = iou_cost[track_matches, box_matches]
-            mask = matched_ious > self.iou_threshold
-            matches = matches[mask] #only take those matches that have sufficient IoU overlap
-            
-            for match in matches:
-                track_idx, box_idx = match
-                self._associate(self.alive_tracks[track_idx], high_conf_boxes[box_idx])
-            matched_track_idxs, matched_box_idxs = matches.T  
-                
-            matched_mask = np.zeros(shape=len(self.alive_tracks), dtype=bool)
-            matched_mask[matched_track_idxs] = True
-            unmatched_mask = ~matched_mask #mask of those alive tracks unmatched
-            
-            matched_box_mask = np.zeros(shape=len(high_conf_boxes), dtype=bool)
-            matched_box_mask[matched_box_idxs] = True
-            unmatched_high_conf_mask = ~matched_box_idxs #mask of those high conf boxes unmatched   
-            
-            
-            #do second level matching between remaining high confidence boxes
-            #and low confidence boxes with unmatched tracks and lost tracks?
-            #how to do track recovery? See OC-SORT/ByteTrack
-            
-            
-            
-            #remaining boxes can be thrown away,
-            #remaining tracks are either expired, or put on hold
-            
-            
-            
-            
-           
-
-        #handle case where all boxes are low confidence. 
         
         
     def update(detections, scores, frame=None):
@@ -150,10 +96,22 @@ class Tracker:
         Args:
             detections (np.ndarray): detected bboxes in xywh format.
             scores (np.ndarry): 1d array of confidence scores
+            frame (np.ndarray | None): The frame currently being considered. If None, will use self.latest_frame.
         
         Returns:
             output bboxes with IDs of shape Nx5 [[x,y,w,h,ID], ...]
         """
+        
+        # 2. Divide boxes into high and low confidence boxes.
+        
+        # 3. The high confidence boxes are matched first with the predictions of the tracks.
+        # 4. Next the remaining tracks are matched with the low confidence boxes (maybe occluded objects)
+        # 5. Finally the *last observations* (OC-recovery) of the remaining tracks are matched with the
+        #    remaining high confidence boxes.
+        # 6. Any remaining high confidence boxes are used to create new tracks.
+        # 7. Tracks are updated with new boxes.
+        # 8. All the tracks that have a streak of detections > threshold (=3) are considered "proper"
+        #   tracks and are returned/added to the image.     
             
     
     def _associate(self, track, box):
