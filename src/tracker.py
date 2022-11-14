@@ -1,10 +1,10 @@
 import numpy as np
 from scipy.optimize import linear_sum_assignment as hungarian_algorithm
-from detector import Detector
-from track import Track
-from visualizer import TrackVisualizer
-from tools import get_iou_matrix, get_velocity_matrix
+from .track import Track
+from .visualizer import TrackVisualizer
+from .tools import get_iou_matrix, get_velocity_matrix
 import time
+from loguru import logger
 
 
 #TODO: Add appearance information
@@ -33,8 +33,8 @@ import time
     
 
 class Tracker:
-    def __init__(self, det, track_expiry_time=50, low_conf_threshold=0.6, min_conf_threshold=0.2,
-                 iou_threshold=0.2, lambda_vel=0.2, streak_threshold=3, MOT_IDs=True):
+    def __init__(self, det, track_expiry_time=50, low_conf_threshold=0.5, min_conf_threshold=0.2,
+                 iou_threshold=0.1, lambda_vel=0.2, streak_threshold=3, MOT_IDs=True):
         """The main tracker that handles a single step of tracking. 
         
         Args:
@@ -58,12 +58,14 @@ class Tracker:
         self.id_ctr = 1 if MOT_IDs else 0 
         self.appearance_model = None #TODO
         self.low_conf_threshold = low_conf_threshold
+        self.low_conf_iou_threshold = 0.5
         self.latest_frame = None
         self.visualizer = TrackVisualizer()
         self.iou_threshold = iou_threshold
         self.lambda_vel = lambda_vel
         self.track_expiry_time = track_expiry_time
         self.streak_threshold = streak_threshold
+        self.num_frames = 0
         
 
         
@@ -78,11 +80,18 @@ class Tracker:
         #bboxes is Nx7
         
         self.latest_frame = frame
+        self.num_frames += 1
+
         bboxes, img_info = self.detector(frame)
         
+        if self.num_frames < 2:
+            #logger.log("INFO", f"Starting step and bboxes.shape is {bboxes.shape}") 
+            pass      
         
-        ratio = self.detector._get_ratio(img_info["raw_img"])
-        bboxes[..., :4] /= ratio #normalize boxes
+        #ratio = self.detector._get_ratio(img_info["raw_img"]) 
+        ratio = img_info["ratio"]
+        #logger.info(f"bboxes shape = {bboxes.shape}")
+        bboxes[..., :4] /= ratio #resize boxes to original image size
         scores = bboxes[..., 4] * bboxes[..., 5]
         
         t0 = time.time()
@@ -93,7 +102,8 @@ class Tracker:
           
         
     def update(self, detections, scores, frame=None):
-        """Given rescaled detected bounding boxes and their confidence scores, updates the trackers by associating detections to appropriate trackers.
+        """Given rescaled detected bounding boxes and their confidence scores, updates the trackers by associating detections to appropriate trackers. NOTE: The ID is passed as a float. Convert it 
+        to an int before proceeding.f
 
         Args:
             detections (np.ndarray): detected bboxes in xywh format.
@@ -111,47 +121,51 @@ class Tracker:
         # 2. Divide boxes into high and low confidence boxes.
         high_conf_boxes = detections[scores > self.low_conf_threshold]
         low_conf_boxes = detections[scores  <= self.low_conf_threshold]
-        
+        scores = scores[scores > self.low_conf_threshold]
+        #logger.info(f"Num high conf boxes = {len(high_conf_boxes)}")
+        #logger.info(f"Num low conf boxes = {len(low_conf_boxes)}")
         no_high_boxes = high_conf_boxes.size == 0 #flag for no boxes
         no_low_boxes = low_conf_boxes.size == 0
         
         if not self.tracks: #all high confidence boxes are new tracks.
+            if no_high_boxes:
+                return np.empty((0,5))
             self.tracks = [Track(box, id=i+self.id_ctr) for i,box in enumerate(high_conf_boxes)]
             self.id_ctr += len(self.tracks)
-            
-            box_with_ids = np.stack([np.concatenate([t.box_coordinates, 
+            #logger.log("INFO", f"There are no tracks. There are {len(high_conf_boxes)} boxes.")
+            box_with_ids = np.stack([np.concatenate([t.get_box_coordinates(), 
                                                      np.array([t.id])]) for t in self.tracks], 
                                     axis=0)
             
             return box_with_ids
-        
         if no_high_boxes and no_low_boxes:
-            for track in self.trackers:
+            for track in self.tracks:
                 track.update(None)
             return np.empty((0,5))
-        
         pred_tracks = np.stack([t.predict() for t in self.tracks], axis=0)
-        last_obs_tracks = np.stack([t.last_observation for t in self.tracks], axis=0)
+        last_observations = np.stack([t.last_observation for t in self.tracks], axis=0)
         track_indices = np.arange(len(self.tracks))
-        
         # 3. The high confidence boxes are matched first with the predictions of the tracks
         if not no_high_boxes :#if there are high confidence boxes
             box_indices = np.arange(len(high_conf_boxes))
             #we want a cost matrix, so higher is worse
             iou_scores = get_iou_matrix(pred_tracks, high_conf_boxes)
-            iou_cost = 1 - iou_cost
+            iou_cost = 1 - iou_scores
             
-            last_observations = np.stack([t.last_observation for t in self.tracks], axis=0)
+            #last_observations = np.stack([t.last_observation for t in self.tracks], axis=0)
             #NxMx2
-            
-            velocity_matrix_from_tracks_to_detections = get_velocity_matrix(last_observations, high_conf_boxes) 
-            track_velocities = np.stack([t.velocity_direction for t in self.tracks], axis=0).unsqueeze(1) #Nx1x2
+            velocity_matrix_from_tracks_to_detections = get_velocity_matrix(last_observations[...,:2], high_conf_boxes[..., :2]) 
+            track_velocities = np.expand_dims(np.stack([t.velocity_direction for t in self.tracks], axis=0)
+                                              , 1) #Nx1x2
+            #logger.info(f"track velocities shape = {track_velocities.shape}")
+            #logger.info(f"velocity matrix shape = {velocity_matrix_from_tracks_to_detections.shape}")
             
             #take dot product between the two unit vectors. The more aligned they are, the higher the score.
             velocity_consistency_matrix = np.sum(velocity_matrix_from_tracks_to_detections *
                                                  track_velocities,
                                                  axis=-1) #NxM
-            velocity_consistency_matrix *= scores.unsqueeze(0) #velocity score is weighted by object confidence
+            
+            velocity_consistency_matrix *= scores[np.newaxis, ...] #velocity score is weighted by object confidence
             
             #we want a cost matrix for which higher is worse. Also we normalize to get between 0 and 1
             velocity_cost = (1-velocity_consistency_matrix) / 2
@@ -162,22 +176,28 @@ class Tracker:
                                                                          iou_cost + self.lambda_vel * velocity_cost)
             to_unmatch_trks = []
             to_unmatch_boxes = []
-            for trk_idx, box_idx in matches:
-                if iou_scores[trk_idx, box_idx] < self.iou_threshold: #low iou match, reject
+            for row, column in matches:
+                trk_idx = track_indices[row]
+                box_idx = box_indices[column]
+                if iou_scores[row, column] < self.iou_threshold: #low iou match, reject
                     to_unmatch_trks.append(trk_idx)
                     to_unmatch_boxes.append(box_idx)
                 else:
                     #good match
+                    # logger.info(f"Track ID = {self.tracks[trk_idx].id}")
+                    # logger.info(f"Last observation was {self.tracks[trk_idx].last_observation}")
+                    # logger.info(f"New matched box = {high_conf_boxes[box_idx]}")
+                    # logger.info(f"iou score = {iou_scores[row, column]}")
+                    # logger.info(f"predicted tracks = {pred_tracks[trk_idx]}\n\n\n\n")
                     self.tracks[trk_idx].update(high_conf_boxes[box_idx])
-                    
-            unmatched_tracks = np.concatenate([unmatched_tracks, np.array(to_unmatch_trks)])
-            unmatched_boxes = np.concatenate([unmatched_boxes, np.array(to_unmatch_boxes)])
+            
+            # logger.info(f"\n\n!!!!!! 1) track number 1 on screen: {self.tracks[0].get_box_coordinates()}\n\n") 
+            unmatched_tracks = np.concatenate([unmatched_tracks, np.array(to_unmatch_trks,dtype=int)])
+            unmatched_boxes = np.concatenate([unmatched_boxes, np.array(to_unmatch_boxes, dtype=int)])
 
         else: #there are no high boxes
-            unmatched_tracks = track_indices
+            unmatched_tracks = track_indices 
             
-
-    
         # 4. Next the remaining tracks are matched with the low confidence boxes (maybe occluded objects) using only IoU as a cost. This is the BYTE association of ByteTrack.
         
         if not no_low_boxes: #if there are low boxes to consider.
@@ -191,40 +211,40 @@ class Tracker:
             
             #we may ignore any matches below IoU threshold
             matched_trks, matched_dets = matches.T #the rows and columns from 
-            filtered_matches = matches[iou_scores[matched_trks,matched_dets] >= self.iou_threshold] 
+            #logger.info(f"iou_scores has shape {iou_scores.shape}, {len(unmatched_track_boxes)}, \
+             #   {len(low_conf_boxes)}, matches.shape {matches.shape} ")
+            #logger.info(f"matches.shape {matches.shape}, {iou_scores[matched_trks, matched_dets]}")
+            filtered_matches = matches[iou_scores[matched_trks,matched_dets] >= self.low_conf_iou_threshold] 
             
             matched_idxs = []
-            for trk_idx, box_idx in filtered_matches:
-                self.tracks[trk_idx].update(low_conf_boxes[box_idx])
-                matched_idxs.append(trk_idx)
+            for row, column in filtered_matches:
+                self.tracks[unmatched_tracks[row]].update(low_conf_boxes[low_box_indices[column]])
+                matched_idxs.append(unmatched_tracks[row])
                 
              
-            unmatched_tracks = np.setdiff1d(unmatched_tracks, np.array(matched_idxs))
-                    
-                    
-        
-        
+            unmatched_tracks = np.setdiff1d(unmatched_tracks, np.array(matched_idxs, dtype=int))
+            
         # 5. Finally the **last observations** (OC-recovery) of the remaining tracks are matched with the remaining high confidence boxes. Gives priority to observations over predictions.
         if not no_high_boxes:
             
-            remaining_high_box_idxs = np.setdiff1d(box_indices, unmatched_boxes)
-            
-            if remaining_high_box_idxs.size: #if there are boxes remaining
+            matched_box_idxs = np.setdiff1d(box_indices, unmatched_boxes)
+            if matched_box_idxs.size: #if there are boxes remaining
                 
-                remaining_high_boxes = high_conf_boxes[remaining_high_box_idxs]
+                remaining_high_boxes = high_conf_boxes[unmatched_boxes]
                 remaining_trks = last_observations[unmatched_tracks]
-                
                 #Cost is a combination of IoU and appearance (todo).
-                iou_scores = get_iou_matrix(remaining_high_boxes, remaining_trks)
+                iou_scores = get_iou_matrix(remaining_trks, remaining_high_boxes)
                 iou_cost = 1 - iou_scores
-                
-                matches, unmatched_tracks, unmatched_boxes = self._associate(remaining_high_box_idxs,
-                                                                             unmatched_tracks, iou_cost)
-                
+                rem_tracks = unmatched_tracks.copy()
+                rem_boxes = unmatched_boxes.copy()
+                matches, unmatched_tracks, unmatched_boxes = self._associate(unmatched_tracks, unmatched_boxes, iou_cost)
                 extra_unmatched_trks = []
                 extra_unmatched_boxes = []
-                for trk_idx, box_idx in matches:
-                    if iou_scores[trk_idx, box_idx] >= self.iou_threshold:
+                tmp, _ = matches.T
+                for row, column in matches:
+                    trk_idx = rem_tracks[row]
+                    box_idx = rem_boxes[column]
+                    if iou_scores[row, column] >= self.iou_threshold:
                         #keep association
                         self.tracks[trk_idx].update(high_conf_boxes[box_idx])
                         
@@ -232,18 +252,20 @@ class Tracker:
                         #remove association
                         extra_unmatched_trks.append(trk_idx)
                         extra_unmatched_boxes.append(box_idx)
-                unmatched_tracks = np.concatenate([unmatched_tracks, np.array(extra_unmatched_trks)])
-                unmatched_boxes = np.concatenate([unmatched_boxes, np.array(extra_unmatched_boxes)])
+                unmatched_tracks = np.concatenate([unmatched_tracks, np.array(extra_unmatched_trks, dtype=int)])
+                unmatched_boxes = np.concatenate([unmatched_boxes, np.array(extra_unmatched_boxes, dtype=int)])
         
-            
         # 6. Unmatched Tracks are updated with None.
         for trk in unmatched_tracks:
             self.tracks[trk].update(None)
         
+        
+        
         # 7. Any remaining high confidence boxes are used to create new tracks.
-        for box_idx in unmatched_boxes:
-            self.tracks.append(Track(high_conf_boxes[box_idx], id=self.id_ctr))
+        for column in unmatched_boxes:
+            self.tracks.append(Track(high_conf_boxes[column], id=self.id_ctr))
             self.id_ctr += 1
+        
         
         
         # 8. All the tracks that have a streak of detections > threshold (=3) are considered "proper" tracks and are returned/added to the image. All tracks that have been missed for longer than expiry date are removed.
@@ -254,24 +276,62 @@ class Tracker:
             track = self.tracks[i]
             
             if track.obs_streak >= self.streak_threshold or track.time_lapsed < self.streak_threshold:
-                proper_detections.append(np.concatenate(track.get_box_coordinates(),
-                                                        np.array([track.id])))
+                proper_detections.append(np.concatenate([track.get_box_coordinates(),
+                                                        np.array([track.id])]))
             
             if track.time_since_last_detection > self.track_expiry_time:
                 self.tracks.pop(i)
                 
+        if not proper_detections:
+            return np.empty((0,5))
+        
+        # logger.info(f"\n\n\n number of consec hits for each track = \n {[t.obs_streak for t in self.tracks]} \n\n\n")
+        
+        # logger.info(f"track number 1 with id {self.tracks[0].id} last observation: {self.tracks[0].observation_before_last}")
+        # logger.info(f"\n\n!!!!!! track number 1 on screen: {self.tracks[0].get_box_coordinates()}\n\n")   
         return np.stack(proper_detections, axis=0)
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     
     def _associate(self, tracks, boxes, cost_matrix):
         """Given track and box indices as 1d numpy arrays, and a cost matrix for associations between them, performs linear assignment.
         Returns matches as an Nx2 np array, unmatched_tracks as a 1d array, and unmatched_dets as a 1d array."""
+        #logger.info(f"cost_matrix = {cost_matrix}")
         matched_tracks, matched_boxes = hungarian_algorithm(cost_matrix)
         track_mask = np.zeros_like(tracks, dtype=bool)
         track_mask[matched_tracks] = True
-        box_mask = np.zeros(boxes, dtype=bool)
+        box_mask = np.zeros_like(boxes, dtype=bool)
+        #logger.info(f"len(tracks)= {len(tracks)}, boxes = {boxes}, track_mask")
         box_mask[matched_boxes] = True
-        matched_tracks = tracks[track_mask]
-        matched_boxes = boxes[box_mask]
+        #matched_tracks = tracks[track_mask]
+        #matched_boxes = boxes[box_mask]
         
         unmatched_tracks = tracks[~track_mask]
         unmatched_boxes = boxes[~box_mask]
@@ -284,5 +344,6 @@ class Tracker:
             
     def draw(self, frame, tracks):
         """Draws the bounding boxes with ID for each track and returns an img in RGB order."""
-         
-        return self.visualizer(frame, tracks) if tracks else frame
+        if tracks.size == 0: #if there is nothing to draw, return image as is
+            return frame 
+        return self.visualizer(frame, tracks)

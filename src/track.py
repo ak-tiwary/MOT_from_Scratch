@@ -3,6 +3,7 @@ import numpy as np
 from filterpy.kalman import KalmanFilter
 from collections import defaultdict
 from functools import partial
+from loguru import logger
 
 
 
@@ -13,6 +14,11 @@ from functools import partial
 
 #2) handle camera motion compensation frame to frame when performing observation
 #centric recovery
+
+#3) Add variation in Q and R noise matrices for kalman filter to depend on confidence of the detection (NSA Kalman Filter)
+#4) Replace IoU with GIoU
+#5) Replace hungarian algorithm with Jonker-Volgenant for linear assignment 
+
 
 
 class Track:
@@ -32,12 +38,28 @@ class Track:
         """
         
         box_coordinates = bbox
+        _,_,w,h = box_coordinates
         self.box_conf = box_conf
         self.class_category = class_category
         
         self.kf = KalmanFilter(dim_x=8, dim_z=4)
-        self.kf.x = box_coordinates
-        self.kf.P = np.diag([1., 1, 1, 1, 1000, 1000, 1000, 1000]) #unsure of velocities at start
+        self.kf.x[:4,0] = box_coordinates
+        
+        
+        #initial values for covariance and noise matrices taken from BOT-SORT
+        self._std_weight_position = 1./20
+        self._std_weight_velocity = 1./160
+        std = [
+            2 * self._std_weight_position * w,
+            2 * self._std_weight_position * h,
+            2 * self._std_weight_position * w,
+            2 * self._std_weight_position * h,
+            10 * self._std_weight_velocity * w,
+            10 * self._std_weight_velocity * h,
+            10 * self._std_weight_velocity * w,
+            10 * self._std_weight_velocity * h]
+        
+        self.kf.P = np.diag(np.square(std))
         
         #state transition matrix is [[1,0,0,0,1,0,0,0], [0,1,0,0,0,1,0,0],...] as usual
         np.put(self.kf.F, [x * 8 + x + 4 for x in range(4)], np.ones(4))
@@ -46,20 +68,32 @@ class Track:
         np.put(self.kf.H, [x * 8 + x for x in range(4)], np.ones(4))
         
         #process noise represents deviation of real motion from estimated motion in KF
-        #since a linear motion model is a good approximation at low velocities,
-        #we assign a low process noise
-        self.kf.Q = np.diag([1., 1., 1., 1., .01, .01, .01, .01]) 
+        std = [
+            self._std_weight_position * w,
+            self._std_weight_position * h,
+            self._std_weight_position * w,
+            self._std_weight_position * h,
+            self._std_weight_velocity * w,
+            self._std_weight_velocity * h,
+            self._std_weight_velocity * w,
+            self._std_weight_velocity * h]
+        self.kf.Q = np.diag(np.square(std)) 
         
         #measurement noise.
-        #center is easier to estimate than width and height
-        self.kf.R = np.diag([1., 1., 10., 10.])
+        std = [
+            self._std_weight_position * w,
+            self._std_weight_position * h,
+            self._std_weight_position * w,
+            self._std_weight_position * h]
+        self.kf.R = np.diag(np.square(std))
+        self.dt = dt
         
         
         self.time_since_last_detection = 0
         self.kf_at_last_detection = None #for OC-Smoothing, we revert KF to this state
         self.last_observation = bbox
         self.observation_before_last = None
-        self.obs_streak = 1 #streak of matched boxes
+        self.obs_streak = 1 #streak of matched boxes. Currently we have 1 match streak.
         self.observation_history = defaultdict(partial(np.ndarray, 0))
         self.id = id
         self.time_lapsed = 0
@@ -83,20 +117,25 @@ class Track:
         even when there is no matched box with None as parameter."""
         self.time_lapsed += 1
         
+        
+        
         if box is None:
             #there was no matching at this step.
-            self.kf.update(None)
-            self.obs_streak = 0
+            
             
             #we just lost the track, so we keep a copy of the KF before future steps
             if self.time_since_last_detection == 0:
                 self.kf_at_last_detection = copy.deepcopy(self.kf)
+                
+            self.kf.update(None)
+            self.obs_streak = 0
             
             self.time_since_last_detection += 1
             return
         
-        
-        if self.time_since_last_detection > 1:
+        assert box.size == 4, "box should have size 4"
+        #we missed a detection somewhere and just recovered so perform recovery of Kalman filter
+        if self.time_since_last_detection >= 1:
             self.observation_centric_recovery(box, self.time_since_last_detection)
         
             
@@ -147,12 +186,11 @@ class Track:
         old_box = self.get_box_coordinates(kf)
         diff_box = box - old_box
         step_size = 1./num_steps
-        for i in range(num_steps-1):
+        for i in range(num_steps):
             box_i = old_box + (i+1) *step_size * diff_box
             kf.predict()
             kf.update(box_i)
-        kf.predict()
-        kf.update(box)
+        
         self.kf = kf
         self.kf_at_last_detection = None
         
@@ -160,8 +198,8 @@ class Track:
     def get_box_coordinates(self, kf=None):
         """Returns box coordinates"""
         if kf is not None:
-            return kf.x[:4]
-        return self.kf.x[:4]
+            return kf.x[:4].squeeze()
+        return self.kf.x[:4].squeeze()
 
 
 
@@ -169,4 +207,4 @@ class Track:
 def normalize(v, eps=1e-12):
     """Given a 1d numpy array v, normalizes it to have unit length (or zero)"""
     norm = np.linalg.norm(v)
-    return v / (norm(v) + eps)
+    return v / (norm + eps)

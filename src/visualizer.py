@@ -208,10 +208,10 @@ class Visualizer:
         """
         img = img_info['raw_img']
         ratio = img_info['ratio']
-        boxes = boxes.to(torch.device("cpu")).numpy()
+        #boxes = boxes.to(torch.device("cpu")).numpy()
         boxes[..., :4] /= ratio
-        logger.log("INFO", f"boxes shape {boxes.shape}")
-        logger.log("INFO", f"boxes[:,-1] {boxes[:,-1]}")
+        #logger.log("INFO", f"boxes shape {boxes.shape}")
+        #logger.log("INFO", f"boxes[:,-1] {boxes[:,-1]}")
         class_labels = [self.class_names[label_idx] for label_idx in boxes[:, -1].astype(int)]
         
         #opencv does inplace modifications, so just for safety we work with a copy
@@ -239,7 +239,7 @@ class Visualizer:
             text = f"{class_labels[i]} {conf * 100:.1f}%"
             
             box_color = tuple(self.class_colors[box[-1].astype(int)].tolist())
-            print(f"box_color = {box_color}")
+            #print(f"box_color = {box_color}")
             text_color = (0,0,0) if np.mean(box_color) > (255 / 2) else (255,255,255)
             
             #drawn bounding box
@@ -272,16 +272,19 @@ class TrackVisualizer(Visualizer):
         img_copy = cv2.cvtColor(frame.copy(), cv2.COLOR_RGB2BGR)
         
         #we need xyxy format for opencv
-        boxes[..., :2], boxes[..., 2:] = boxes[..., :2] - (boxes[..., 2:] / 2), \
-                                         boxes[..., :2] + (boxes[..., 2:] / 2)
+        boxes[..., :2], boxes[..., 2:4] = boxes[..., :2] - (boxes[..., 2:4] / 2), \
+                                         boxes[..., :2] + (boxes[..., 2:4] / 2)
         
         for i, box in enumerate(boxes):
             x1,y1,x2,y2, id = box
             #opencv needs integer pixel coordinates
-            x1,y1,x2,y2 = map(int, [x1,y1,x2,y2])
+            x1,y1,x2,y2, id = map(int, [x1,y1,x2,y2, id])
             
             text = f"{id}"
-            box_color = tuple(self.class_colors[id % len(self.class_colors)])
+            #logger.log("INFO", f"id is {id}, len(self.class_colors) = {len(self.class_colors)} ")
+            
+            box_color = tuple(self.class_colors[id % len(self.class_colors)].tolist())
+            #logger.log("INFO", f"box_color = {box_color}")
             text_color = (0,0,0) if np.mean(box_color) > (255 / 2) else (255,255,255)
             
             img_copy = cv2.rectangle(img_copy, (x1, y1), (x2,y2),

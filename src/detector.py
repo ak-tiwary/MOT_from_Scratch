@@ -11,6 +11,7 @@ import numpy as np
 import torch
 import torchvision
 import cv2
+from loguru import logger
 
 
 
@@ -82,7 +83,7 @@ class Detector:
             img (numpy array):unnormalized image in RGB order of shape HxWxC.
             
         Returns:
-            a tuple (bboxes, image_info) where bboxes is a numpy array and image_info is a dict.
+            a tuple (bboxes, image_info) where bboxes is a numpy array of shape Nx7 and image_info is a dict.
         """
         assert len(img.shape) == 3, f"Shape of imgs is {img.shape} but it should be CxHxW"
         img_info = {}
@@ -94,8 +95,13 @@ class Detector:
         img_tensor = img_tensor.unsqueeze(0).cuda().float()
         with torch.no_grad():
             unprocessed_boxes = self.model(img_tensor)
-            output = self._postprocess(unprocessed_boxes) #Shape is M x 7
-        return output, img_info
+            #logger.info(f"output has shape {output.shape}")
+            processed_boxes, = self._postprocess(unprocessed_boxes) #Shape is M x 7
+            #logger.info(f"output has shape {output.shape}")
+            #output = torch.stack(output, dim=0).cpu().numpy()
+            processed_boxes = processed_boxes.cpu().numpy()
+            #logger.info(f"output has shape {output.shape}")
+        return processed_boxes, img_info
         
         #shape of output is NxMx (4 + 1 + C) where M is the number of boxes per image and C is num_classes
   
