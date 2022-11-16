@@ -22,7 +22,7 @@ _Wait for a second for the gif to load._
 
 TO DO:
 
-* Add an appearance model using ideas from the Simple Cues and Bag of Tricks papers. 
+* Add an appearance model using ideas from [Simple Cues Lead to a Strong Multi-Object Tracker (2022)](https://arxiv.org/pdf/2206.04656.pdf) and [Bag of tricks for ReID paper](https://arxiv.org/pdf/1903.07071.pdf). 
   * Add active and inactive track handling.
   * Rework code to make it easier to modify. Move the code from update into helper functions so update can be easier to modify.
   * Use proxy distance averaged over all previous appearances for inactive tracks.
@@ -35,4 +35,13 @@ TO DO:
   * Replace IoU with GIoU and see if it improves things.
   * Replace the hungarian algorithm using the Jonker-Volgenant method to make it faster.
   * Add Camera Motion Compensation from either StrongSORT or the other paper.
+
+
+
+----------------------------------------------------------------------------------------------------------------
+
+
+Acknowledgements:
+
+I learned a lot from reading the SORT (2017), ByteTrack (2021), OC-SORT (2022), BoT-SORT (2022) papers (and many others). I thank these authors for graciously providing their code online for everyone. All code here is my own but it follows these papers and I referred to the codebase when I wanted some clarification on the paper.
   
