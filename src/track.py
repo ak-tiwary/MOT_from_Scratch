@@ -24,7 +24,8 @@ from loguru import logger
 class Track:
     """A single track, containing information about one box
     over multiple frames."""
-    def __init__(self, bbox, id, box_conf=None, class_category=None, dt=3):
+    def __init__(self, bbox, id, box_conf=None, class_category=None, dt=3, uses_appearance=False,
+                 appearance_features=None):
         """Initialize track with bounding box in xywh format. We track xywh itself in
         the Kalman Filter following BoT-Sort (2022) instead of the standard xysr.
         
@@ -35,6 +36,8 @@ class Track:
             box_conf (float | None): Optional box confidence
             class_category (float | None): Optional class category
             dt (int):  Frame interval to use for velocity calculations. Defaults to 3, as suggested by OC-Sort.
+            uses_apperance (bool) : A flag to determine if the tracker uses an appearance model
+            appearance_features (np.ndarray | None) : If uses_appearance, then this is nd array
         """
         
         box_coordinates = bbox
@@ -99,7 +102,21 @@ class Track:
         self.time_lapsed = 0
         self.observation_history[self.time_lapsed] = bbox
         self.velocity_direction = np.array([0,0])
+        self.is_inactive = False #a flag denoting if a track is inactive.
         
+        self.num_hits = 1
+        
+        self.uses_appearance = uses_appearance
+        
+        
+        if self.uses_appearance:
+            assert appearance_features is not None
+            self.appearance_indices = [self.time_lapsed]
+            self.appearance_history = defaultdict(partial(np.ndarray, 0))
+            self.appearance_history[self.time_lapsed] = appearance_features
+            self.last_appearance = appearance_features
+            self.avg_apperance = self.last_appearance #average over all appearances
+            
         
     def predict(self):
         """Predicts the location of the box using the kalman filter and returns box coordinates.
@@ -110,11 +127,18 @@ class Track:
             
         return self.get_box_coordinates()
     
-    def update(self, box):
+    def update(self, box, appearance_features=None):
         """Updates the kalman filter with the observation in 1d np array box.
         Box is either xywh coordinates, or xywh+3 coordinates. If the box is None, will
         update the kalman filter's posteriors only. It is assumed that update is called
-        even when there is no matched box with None as parameter."""
+        even when there is no matched box with None as parameter.
+        
+        If appearance_score is None then assumed that the whole tracker doesn't use an
+        appearance model. Otherwise all update steps"""
+        
+        if appearance_features is None:
+            assert self.uses_appearance == False
+        
         self.time_lapsed += 1
         
         
@@ -127,6 +151,7 @@ class Track:
             if self.time_since_last_detection == 0:
                 self.kf_at_last_detection = copy.deepcopy(self.kf)
                 
+            self.is_inactive = True
             self.kf.update(None)
             self.obs_streak = 0
             
@@ -147,7 +172,19 @@ class Track:
         
         self.observation_history[self.time_lapsed] = box
         self.obs_streak += 1
-
+        
+        
+        
+        if self.uses_appearance is not None:
+            self.appearance_history[self.time_lapsed] = appearance_features
+            self.last_appearance = appearance_features
+            
+            #N = self.num_hits
+            #self.avg_apperance = N/(N+1) * self.avg_apperance + 1/(N+1) * appearance_features
+            self.appearance_indices.append(self.time_lapsed)
+            
+        self.num_hits += 1
+        
         self.observation_before_last = self.last_observation
         self.last_observation = box
         self.time_since_last_detection = 0
@@ -196,12 +233,19 @@ class Track:
         
         
     def get_box_coordinates(self, kf=None):
-        """Returns box coordinates"""
+        """Returns box coordinates""" 
         if kf is not None:
             return kf.x[:4].squeeze()
         return self.kf.x[:4].squeeze()
+    
+    def get_last_appearance(self):
+        """Assumes self.uses_appearance is True"""
+        assert self.uses_appearance
+        
+        return self.last_appearance
 
-
+    def get_appearances_and_indices(self):
+        return self.appearance_history, self.appearance_indices
 
 
 def normalize(v, eps=1e-12):

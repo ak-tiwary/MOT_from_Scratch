@@ -28,7 +28,7 @@ TO DO:
   * Use proxy distance averaged over all previous appearances for inactive tracks.
   * Use long term memory handling.
   * Identify the thresholds for average distance between positive and negative classes. Use this to form the matching threshold for active and inactive tracks.
-  * Use on the fly domain adaptation for the appearance model where we use mean and variance for the current batch even during inference.
+  * ~~Use on the fly domain adaptation for the appearance model where we use mean and variance for the current batch even during inference.~~
 * Simple updates to make it better
   * Add NSA Kalman Filter by weighting error based on detection confidence
   * Make the process and noise matrices dependent on time like in Strong SORT
