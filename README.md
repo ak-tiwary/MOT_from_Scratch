@@ -1,6 +1,6 @@
 # Multi Object Tracking From Scratch
 
-This project implements a multi object tracker from scratch, using YOLOX as the detector. It combines ideas from SORT (2017), OC-SORT (2022), and ByteTrack (2021). 
+This project implements a multi object tracker from scratch, using YOLOX as the detector. It combines ideas from SORT (2017), OC-SORT (2022), ByteTrack (2021), and Simple Cues Lead to a Strong Multi Object Tracker (2022). 
 
 ### Demo:
 
