@@ -23,10 +23,10 @@ _Wait for a second for the gif to load._
 TO DO:
 
 * Add an appearance model using ideas from [Simple Cues Lead to a Strong Multi-Object Tracker (2022)](https://arxiv.org/pdf/2206.04656.pdf) and [Bag of tricks for ReID paper](https://arxiv.org/pdf/1903.07071.pdf). 
-  * Add active and inactive track handling.
+  * ~~Add active and inactive track handling.~~
   * Rework code to make it easier to modify. Move the code from update into helper functions so update can be easier to modify.
-  * Use proxy distance averaged over all previous appearances for inactive tracks.
-  * Use long term memory handling.
+  * ~~Use proxy distance averaged over all previous appearances for inactive tracks.~~
+  * ~~Use long term memory handling.~~
   * Identify the thresholds for average distance between positive and negative classes. Use this to form the matching threshold for active and inactive tracks.
   * ~~Use on the fly domain adaptation for the appearance model where we use mean and variance for the current batch even during inference.~~
 * Simple updates to make it better
@@ -43,5 +43,5 @@ TO DO:
 
 Acknowledgements:
 
-I learned a lot from reading the SORT (2017), ByteTrack (2021), OC-SORT (2022), BoT-SORT (2022) papers (and many others). I thank these authors for graciously providing their code online for everyone. All code here is my own but it follows these papers and I referred to the codebase when I wanted some clarification on the paper.
+I learned a lot from reading the *SORT* (2017), *ByteTrack* (2021), *OC-SORT* (2022), *BoT-SORT* (2022) and *Simple Cues Lead to a Strong Object Tracker* (2022) papers (and many others). I thank these authors for graciously providing their code online for everyone. All code here is my own but it follows these papers and I referred to the codebase when I wanted some clarification on the paper. I'd like to also thank Jenny Seidenschwarz, the first author of the simple cues paper, for clarifying "on the fly domain adaptation" for me.
   

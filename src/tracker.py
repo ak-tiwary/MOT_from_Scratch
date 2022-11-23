@@ -39,10 +39,17 @@ from loguru import logger
     
 
 class Tracker:
-    def __init__(self, det, appearance_model = None, track_expiry_time=500000, 
-                 low_conf_threshold=0.5, min_conf_threshold=0.2, 
-                 iou_threshold=0.1, lambda_vel=0.2, lambda_app=1.5, streak_threshold=3, 
-                 appearance_thresh_alive=0.5, appearance_thresh_dead=0.75, MOT_IDs=True,
+    def __init__(self, det, appearance_model = None,
+                 track_expiry_time=500000, 
+                 low_conf_threshold=0.5, 
+                 min_conf_threshold=0.2, 
+                 iou_threshold=0.1,
+                 lambda_vel=0.2, 
+                 lambda_app=1.5, 
+                 streak_threshold=3, 
+                 appearance_thresh_alive=0.5, 
+                 appearance_thresh_dead=0.75, 
+                 MOT_IDs=True,
                  embedding_dim=2048):
         """The main tracker that handles a single step of tracking. 
         
