@@ -35,24 +35,26 @@ def get_backbone():
     
 class Net(nn.Module):
     """The full Siamese network with BNNeck."""
-    def __init__(self, num_classes, backbone=get_backbone(), device=torch.device("cuda"),
-                 normalize=False):
+    def __init__(self, num_classes=751, 
+                 backbone=get_backbone(), 
+                 weight_path="../weights/best_model.pth",
+                 normalize=True):
         """num_classes is the number of identities being classified.
         
         If the normalize flag is true, will normalize feature vectors during inference."""
         #gives features, used to calculate triplet and center loss
         super().__init__()
-        self.backbone = backbone.to(device) 
+        self.backbone = backbone
         
         in_features = backbone._infeatures_temp
         
         #output of this is used during inference
         self.batch_norm = nn.BatchNorm1d(num_features=in_features,
-                                         track_running_stats=False).to(device)
+                                         track_running_stats=False)
         
         self.fc = nn.Linear(in_features=in_features, 
                             out_features=num_classes,
-                            bias=False).to(device)
+                            bias=False)
         #self.register_buffer("imagenet_mean",torch.tensor([0.485, 0.456,0.406]).reshape((1,-1,1,1)))
         #self.register_buffer("imagenet_sd", torch.tensor([0.229, 0.224, 0.225]).reshape((1,-1,1,1)))
         
@@ -63,6 +65,9 @@ class Net(nn.Module):
         # self.imagenet_sd.requires_grad = False
         
         self.normalize = normalize
+        
+        if weight_path is not None:
+            self.load_state_dict(torch.load(weight_path)["model_state_dict"])
         
     def forward(self, x):
         """During test time returns features and output of fc layers.
