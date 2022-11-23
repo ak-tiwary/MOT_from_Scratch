@@ -435,13 +435,23 @@ class Tracker:
         _, D = feature_matrix.shape
         track_features = np.zeros((len(track_indices, D))).astype(float)
         
-        track_apperances = [    
-                                trk.avg_apperance
-                                if (trk := self.tracks[trk_idx]).is_inactive
-                                else trk.get_last_appearance()
+        #the below code is python >=3.8 only but colab is 3.7
+        # track_apperances = [    
+        #                         trk.avg_apperance
+        #                         if (trk := self.tracks[trk_idx]).is_inactive
+        #                         else trk.get_last_appearance()
                             
-                            for trk_idx in track_indices]
-        track_features = np.stack(track_apperances, dim=0)
+        #                     for trk_idx in track_indices]
+        #track_features = np.stack(track_apperances, dim=0)
+        
+        for i,trk_idx in enumerate(track_indices):
+            trk = self.tracks[trk_idx]
+            if trk.is_inactive:
+                feature = trk.avg_apperance
+            else:
+                feature = trk.get_last_appearance()
+            track_features[i] = feature
+        
         
         return 1 - track_features @ feature_matrix.T
         
