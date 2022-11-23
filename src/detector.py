@@ -15,6 +15,34 @@ from loguru import logger
 
 
 
+#######################################
+# FROM OC-SORT
+######################################
+def load_ckpt(model, ckpt):
+    model_state_dict = model.state_dict()
+    load_dict = {}
+    for key_model, v in model_state_dict.items():
+        if key_model not in ckpt:
+            logger.warning(
+                "{} is not in the ckpt. Please double check and see if this is desired.".format(
+                    key_model
+                )
+            )
+            continue
+        v_ckpt = ckpt[key_model]
+        if v.shape != v_ckpt.shape:
+            logger.warning(
+                "Shape of {} in checkpoint is {}, while shape of {} in model is {}.".format(
+                    key_model, v_ckpt.shape, key_model, v.shape
+                )
+            )
+            continue
+        load_dict[key_model] = v_ckpt
+
+    model.load_state_dict(load_dict, strict=False)
+    return model
+
+
 class Detector:
     def __init__(self, exp,  filter_classes=None, device=torch.device("cpu"),
                  test_conf=None, test_size=None, nms_thres=None, class_agnostic=False, 
@@ -67,8 +95,8 @@ class Detector:
         self.class_agnostic = class_agnostic
 
         if chkpt is not None:
-            checkpoint = torch.load(chkpt, map_location="cpu")
-            self.model.load_state_dict(checkpoint["model"])
+            checkpoint = torch.load(chkpt, map_location=device)["model"]
+            self.model = load_ckpt(self.model, checkpoint)
             
         self.num_classes = num_classes
         
@@ -92,7 +120,7 @@ class Detector:
         img_info["ratio"] = self._get_ratio(img)
         
         img_tensor = self._preprocess(img, img_info["ratio"]).to(self.device)
-        img_tensor = img_tensor.unsqueeze(0).cuda().float()
+        img_tensor = img_tensor.unsqueeze(0).to(self.device).float()
         with torch.no_grad():
             unprocessed_boxes = self.model(img_tensor)
             #logger.info(f"output has shape {output.shape}")
